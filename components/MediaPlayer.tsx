@@ -58,6 +58,13 @@ export default function MediaPlayer({
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [imageTransition, setImageTransition] = useState(false);
+  const [cacheStatusMap, setCacheStatusMap] = useState<Map<string, boolean>>(
+    new Map()
+  );
+  const [cacheStats, setCacheStats] = useState<{
+    count: number;
+    maxSize: number;
+  } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -72,6 +79,55 @@ export default function MediaPlayer({
     isCached,
     getCacheStats,
   } = useImageCache();
+
+  // 更新缓存状态指示器
+  useEffect(() => {
+    if (mediaFile?.mediaType === "image" && mediaList.length > 1) {
+      const imageFiles = mediaList.filter((file) => file.mediaType === "image");
+      const currentImageIndex = imageFiles.findIndex(
+        (file) => file.path === mediaFile.path && file.name === mediaFile.name
+      );
+
+      if (currentImageIndex !== -1) {
+        const range = 2;
+        const startIndex = Math.max(0, currentImageIndex - range);
+        const endIndex = Math.min(
+          imageFiles.length - 1,
+          currentImageIndex + range
+        );
+
+        // 异步检查每个图片的缓存状态
+        const checkCacheStatus = async () => {
+          const newCacheStatusMap = new Map<string, boolean>();
+
+          for (let i = startIndex; i <= endIndex; i++) {
+            const imageFile = imageFiles[i];
+            const cacheKey = `${imageFile.path}_${imageFile.name}`;
+            try {
+              const cached = await isCached(imageFile);
+              newCacheStatusMap.set(cacheKey, cached);
+            } catch (error) {
+              console.warn("检查缓存状态失败:", error);
+              newCacheStatusMap.set(cacheKey, false);
+            }
+          }
+
+          setCacheStatusMap(newCacheStatusMap);
+        };
+
+        checkCacheStatus();
+
+        // 同时更新缓存统计信息
+        getCacheStats()
+          .then((stats) => {
+            setCacheStats(stats);
+          })
+          .catch((error) => {
+            console.warn("获取缓存统计失败:", error);
+          });
+      }
+    }
+  }, [mediaFile, mediaList, isCached, getCacheStats]);
 
   // 加载媒体文件
   useEffect(() => {
@@ -348,39 +404,11 @@ export default function MediaPlayer({
     if (canNavigateNext && onNavigateNext) {
       setImageTransition(true);
 
-      // 对于图片，检查下一张是否已缓存
-      if (mediaFile?.mediaType === "image" && mediaList.length > 0) {
-        const currentIndex = mediaList.findIndex(
-          (file) => file.path === mediaFile.path && file.name === mediaFile.name
-        );
-        const imageFiles = mediaList.filter(
-          (file) => file.mediaType === "image"
-        );
-        const currentImageIndex = imageFiles.findIndex(
-          (file) => file.path === mediaFile.path && file.name === mediaFile.name
-        );
-
-        if (
-          currentImageIndex >= 0 &&
-          currentImageIndex < imageFiles.length - 1
-        ) {
-          const nextImage = imageFiles[currentImageIndex + 1];
-          if (isCached(nextImage)) {
-            // 如果下一张图片已缓存，立即切换
-            setTimeout(() => {
-              onNavigateNext();
-              setImageTransition(false);
-            }, 50);
-            return;
-          }
-        }
-      }
-
-      // 默认延迟
+      // 由于本地缓存，所有导航都使用较快的切换速度
       setTimeout(() => {
         onNavigateNext();
         setImageTransition(false);
-      }, 150);
+      }, 100);
     }
   };
 
@@ -388,33 +416,11 @@ export default function MediaPlayer({
     if (canNavigatePrevious && onNavigatePrevious) {
       setImageTransition(true);
 
-      // 对于图片，检查上一张是否已缓存
-      if (mediaFile?.mediaType === "image" && mediaList.length > 0) {
-        const imageFiles = mediaList.filter(
-          (file) => file.mediaType === "image"
-        );
-        const currentImageIndex = imageFiles.findIndex(
-          (file) => file.path === mediaFile.path && file.name === mediaFile.name
-        );
-
-        if (currentImageIndex > 0) {
-          const prevImage = imageFiles[currentImageIndex - 1];
-          if (isCached(prevImage)) {
-            // 如果上一张图片已缓存，立即切换
-            setTimeout(() => {
-              onNavigatePrevious();
-              setImageTransition(false);
-            }, 50);
-            return;
-          }
-        }
-      }
-
-      // 默认延迟
+      // 由于本地缓存，所有导航都使用较快的切换速度
       setTimeout(() => {
         onNavigatePrevious();
         setImageTransition(false);
-      }, 150);
+      }, 100);
     }
   };
 
@@ -945,7 +951,10 @@ export default function MediaPlayer({
                                 ) {
                                   const isCurrentImage =
                                     i === currentImageIndex;
-                                  const cached = isCached(imageFiles[i]);
+                                  const imageFile = imageFiles[i];
+                                  const cacheKey = `${imageFile.path}_${imageFile.name}`;
+                                  const cached =
+                                    cacheStatusMap.get(cacheKey) || false;
                                   indicators.push(
                                     <div
                                       key={i}
@@ -967,10 +976,11 @@ export default function MediaPlayer({
                             </div>
                             <span className="text-[10px]">
                               (
-                              {(() => {
-                                const stats = getCacheStats();
-                                return `${stats.size}/${stats.maxSize}`;
-                              })()}
+                              {cacheStats
+                                ? `${cacheStats.count}/${Math.floor(
+                                    cacheStats.maxSize / (1024 * 1024)
+                                  )}MB`
+                                : "加载中..."}
                               )
                             </span>
                           </div>
