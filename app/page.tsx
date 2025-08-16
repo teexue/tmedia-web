@@ -13,6 +13,7 @@ import {
   createFileExplorerShortcuts,
 } from "@/lib/keyboard";
 import { createMediaNavigationManager } from "@/lib/mediaNavigation";
+import { useImageCache } from "@/lib/imageCache";
 import { Database } from "lucide-react";
 
 interface BreadcrumbItem {
@@ -36,6 +37,9 @@ export default function Home() {
     focusSearch: () => void;
   } | null>(null);
 
+  // 图片缓存服务
+  const { cleanupInvalidCache } = useImageCache();
+
   // 创建媒体导航管理器
   const mediaNavigationManager = useRef(
     createMediaNavigationManager({
@@ -44,6 +48,42 @@ export default function Home() {
       },
     })
   );
+
+  // 自动清理无效缓存（降低频率）
+  useEffect(() => {
+    let cleanupTimeoutId: NodeJS.Timeout;
+    let visibilityTimeoutId: NodeJS.Timeout;
+    let lastCleanup = 0;
+
+    const performCleanup = () => {
+      const now = Date.now();
+      // 限制清理频率：至少间隔5分钟
+      if (now - lastCleanup > 5 * 60 * 1000) {
+        lastCleanup = now;
+        cleanupInvalidCache().catch(console.error);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        // 页面变为可见时，延迟清理无效缓存
+        clearTimeout(visibilityTimeoutId);
+        visibilityTimeoutId = setTimeout(performCleanup, 3000);
+      }
+    };
+
+    // 页面加载时延迟清理
+    cleanupTimeoutId = setTimeout(performCleanup, 5000);
+
+    // 监听页面可见性变化
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      clearTimeout(cleanupTimeoutId);
+      clearTimeout(visibilityTimeoutId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [cleanupInvalidCache]);
 
   // 处理目录选择
   const handleDirectorySelected = (
