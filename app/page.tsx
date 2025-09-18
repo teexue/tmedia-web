@@ -16,6 +16,11 @@ import { createMediaNavigationManager } from "@/lib/mediaNavigation";
 import { useImageCache } from "@/lib/imageCache";
 import { Database } from "lucide-react";
 
+// 启用URL调试器（开发环境）
+if (process.env.NODE_ENV === 'development') {
+  import("@/lib/urlDebugger");
+}
+
 interface BreadcrumbItem {
   name: string;
   handle: FileSystemDirectoryHandle;

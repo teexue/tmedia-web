@@ -5,7 +5,7 @@
 
 import { useMemo } from "react";
 import { MediaFile } from "./types";
-import { createFileURL, revokeFileURL } from "./fileSystem";
+import { createFileURL } from "./fileSystem";
 import { localCacheService } from "./localCache";
 
 // 内存中的临时缓存，用于快速访问
@@ -52,7 +52,7 @@ export class ImageCacheService {
       if (now - entry.timestamp > this.memoryCacheTimeout) {
         expiredKeys.push(key);
         try {
-          revokeFileURL(entry.url);
+          URL.revokeObjectURL(entry.url);
         } catch (error) {
           console.warn("清理内存缓存 URL 失败:", error);
         }
@@ -67,62 +67,27 @@ export class ImageCacheService {
   }
 
   /**
-   * 获取缓存的图片URL（使用本地缓存）
+   * 获取缓存的图片URL（简单返回字符串）
    */
   async getCachedImageURL(mediaFile: MediaFile): Promise<string> {
     const key = this.getCacheKey(mediaFile);
 
     try {
-      // 1. 首先检查内存缓存（最快）
-      const memoryEntry = this.memoryCache.get(key);
-      if (memoryEntry) {
-        const age = Date.now() - memoryEntry.timestamp;
-        if (age < this.memoryCacheTimeout) {
-          memoryEntry.timestamp = Date.now(); // 更新访问时间
-          return memoryEntry.url;
-        } else {
-          // 过期了，清理
-          try {
-            revokeFileURL(memoryEntry.url);
-          } catch (error) {
-            console.warn("清理过期内存缓存失败:", error);
-          }
-          this.memoryCache.delete(key);
-        }
+      // 1. 检查本地缓存（IndexedDB）
+      const cachedResult = await localCacheService.getCachedFileURL(mediaFile);
+      if (cachedResult) {
+        console.log("从本地缓存加载文件:", mediaFile.name);
+        return cachedResult.url; // 只返回URL字符串
       }
 
-      // 2. 检查本地缓存（IndexedDB）
-      const cachedUrl = await localCacheService.getCachedFileURL(mediaFile);
-      if (cachedUrl) {
-        // 存储到内存缓存中以便快速访问
-        this.memoryCache.set(key, {
-          url: cachedUrl,
-          timestamp: Date.now(),
-        });
-
-        // 异步清理内存缓存
-        setTimeout(() => this.cleanupMemoryCache(), 0);
-
-        return cachedUrl;
-      }
-
-      // 3. 从文件系统加载并缓存
+      // 2. 从文件系统加载并缓存
       console.log("从文件系统加载:", mediaFile.name);
       const file = await (mediaFile.handle as FileSystemFileHandle).getFile();
 
-      // 使用本地缓存服务存储文件（会返回 blob URL）
-      const url = await localCacheService.cacheFile(mediaFile, file);
+      // 使用本地缓存服务存储文件
+      const urlInfo = await localCacheService.cacheFile(mediaFile, file);
 
-      // 同时存储到内存缓存
-      this.memoryCache.set(key, {
-        url,
-        timestamp: Date.now(),
-      });
-
-      // 异步清理内存缓存
-      setTimeout(() => this.cleanupMemoryCache(), 0);
-
-      return url;
+      return urlInfo.url; // 只返回URL字符串
     } catch (error) {
       console.error("获取缓存图片失败:", error);
 
@@ -130,14 +95,7 @@ export class ImageCacheService {
       try {
         const file = await (mediaFile.handle as FileSystemFileHandle).getFile();
         const url = URL.createObjectURL(file);
-
-        // 存储到内存缓存
-        this.memoryCache.set(key, {
-          url,
-          timestamp: Date.now(),
-        });
-
-        return url;
+        return url; // 返回URL字符串
       } catch (fallbackError) {
         console.error("创建备用 URL 也失败:", fallbackError);
         throw new Error("无法加载图片文件，请检查文件访问权限");
@@ -177,8 +135,7 @@ export class ImageCacheService {
           if (!isAlreadyCached) {
             const promise = this.getCachedImageURL(imageFile)
               .then((url) => {
-                // 预加载的 URL 不需要立即使用，可以释放内存中的引用
-                // 实际数据已经存储在 IndexedDB 中
+                // 预加载完成，URL已经被存储在缓存中
                 console.log("预加载完成:", imageFile.name);
               })
               .catch((error) => {
@@ -190,7 +147,7 @@ export class ImageCacheService {
       }
 
       await Promise.allSettled(preloadPromises);
-    }, 100); // 延迟100ms开始预加载，避免阻塞当前图片显示
+    }, 10); // 减少到10ms，几乎立即开始预加载
   }
 
   /**
@@ -234,7 +191,7 @@ export class ImageCacheService {
     // 清理内存缓存
     this.memoryCache.forEach((entry) => {
       try {
-        revokeFileURL(entry.url);
+        URL.revokeObjectURL(entry.url);
       } catch (error) {
         console.warn("清理内存缓存 URL 时出错:", error);
       }

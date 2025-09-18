@@ -1,6 +1,8 @@
 /**
  * 本地化文件缓存服务
  * 使用 IndexedDB 存储文件的二进制数据，实现真正的本地缓存
+ * 
+ * 简化版本：直接返回字符串URL
  */
 
 import { MediaFile } from "./types";
@@ -18,8 +20,8 @@ export class LocalCacheService {
   private dbName = "TMediaLocalCache";
   private storeName = "fileCache";
   private version = 1;
-  private maxCacheSize = 50 * 1024 * 1024; // 50MB 最大缓存大小
-  private maxItems = 20; // 最大缓存条目数
+  private maxCacheSize = 100 * 1024 * 1024; // 100MB 最大缓存大小
+  private maxItems = 100; // 最大缓存条目数
 
   private db: IDBDatabase | null = null;
 
@@ -175,7 +177,7 @@ export class LocalCacheService {
   /**
    * 从本地缓存获取文件 URL
    */
-  async getCachedFileURL(mediaFile: MediaFile): Promise<string | null> {
+  async getCachedFileURL(mediaFile: MediaFile): Promise<{ url: string; release: () => void } | null> {
     try {
       const db = await this.initDB();
       const transaction = db.transaction([this.storeName], "readwrite");
@@ -184,7 +186,7 @@ export class LocalCacheService {
 
       return new Promise((resolve, reject) => {
         const request = store.get(key);
-        request.onsuccess = () => {
+        request.onsuccess = async () => {
           const entry = request.result as CacheEntry | undefined;
 
           if (entry) {
@@ -193,12 +195,20 @@ export class LocalCacheService {
             entry.timestamp = Date.now();
             store.put(entry);
 
-            // 从二进制数据创建 Blob URL
-            const blob = new Blob([entry.fileData], { type: entry.mimeType });
-            const url = URL.createObjectURL(blob);
+            try {
+              // 从二进制数据创建 File 对象
+              const blob = new Blob([entry.fileData], { type: entry.mimeType });
+              const file = new File([blob], entry.mediaFile.name, { type: entry.mimeType });
+              
+              // 直接创建URL
+              const url = URL.createObjectURL(file);
 
-            console.log("从本地缓存加载文件:", mediaFile.name);
-            resolve(url);
+              console.log("从本地缓存加载文件:", mediaFile.name);
+              resolve({ url, release: () => URL.revokeObjectURL(url) });
+            } catch (error) {
+              console.warn("创建缓存URL失败:", error);
+              resolve(null);
+            }
           } else {
             resolve(null);
           }
@@ -214,7 +224,7 @@ export class LocalCacheService {
   /**
    * 将文件存储到本地缓存
    */
-  async cacheFile(mediaFile: MediaFile, file: File): Promise<string> {
+  async cacheFile(mediaFile: MediaFile, file: File): Promise<{ url: string; release: () => void }> {
     try {
       const db = await this.initDB();
       const key = this.getCacheKey(mediaFile);
@@ -226,8 +236,9 @@ export class LocalCacheService {
       // 检查单个文件大小（限制为5MB）
       if (arrayBuffer.byteLength > 5 * 1024 * 1024) {
         console.log("文件过大，不缓存:", mediaFile.name);
-        // 直接创建 blob URL，不缓存
-        return URL.createObjectURL(file);
+        // 直接创建URL，不缓存到IndexedDB
+        const url = URL.createObjectURL(file);
+        return { url, release: () => URL.revokeObjectURL(url) };
       }
 
       const entry: CacheEntry = {
@@ -247,16 +258,16 @@ export class LocalCacheService {
       // 异步清理缓存
       this.cleanupCache().catch(console.error);
 
-      // 创建 Blob URL
-      const blob = new Blob([arrayBuffer], { type: mimeType });
-      const url = URL.createObjectURL(blob);
+      // 直接创建URL
+      const url = URL.createObjectURL(file);
 
       console.log("文件已缓存到本地:", mediaFile.name);
-      return url;
+      return { url, release: () => URL.revokeObjectURL(url) };
     } catch (error) {
       console.warn("缓存文件失败:", error);
-      // 失败时直接创建 blob URL
-      return URL.createObjectURL(file);
+      // 失败时直接创建URL
+      const url = URL.createObjectURL(file);
+      return { url, release: () => URL.revokeObjectURL(url) };
     }
   }
 

@@ -242,25 +242,72 @@ export class FileSystemAccessService implements FileSystemService {
 export const fileSystemService = new FileSystemAccessService();
 
 /**
- * 创建文件的 URL 对象用于播放
+ * 验证文件句柄的读取权限，如果需要，会提示用户授权
+ * @param fileHandle 要验证的文件句柄
+ * @returns 如果权限被授予则返回 true，否则返回 false
+ */
+export async function verifyFileHandlePermission(
+  fileHandle: FileSystemFileHandle
+): Promise<boolean> {
+  try {
+    // 查询当前权限状态
+    const permissionStatus = await fileHandle.queryPermission({ mode: "read" });
+
+    if (permissionStatus === "granted") {
+      return true; // 权限已授予
+    }
+
+    if (permissionStatus === "prompt") {
+      // 权限需要用户确认，发起请求
+      const newPermissionStatus = await fileHandle.requestPermission({
+        mode: "read",
+      });
+      return newPermissionStatus === "granted"; // 如果用户同意，则返回 true
+    }
+
+    // 权限被拒绝
+    return false;
+  } catch (error) {
+    console.error("验证文件权限时出错:", error);
+    return false;
+  }
+}
+
+/**
+ * 创建文件的 URL 对象用于播放（简化版本）
  * @param fileHandle 文件句柄
- * @returns 文件 URL
+ * @returns URL字符串
  */
 export async function createFileURL(
   fileHandle: FileSystemFileHandle
 ): Promise<string> {
   try {
+    // 在访问文件之前，验证并请求权限
+    const hasPermission = await verifyFileHandlePermission(fileHandle);
+    if (!hasPermission) {
+      throw new Error(
+        "文件访问权限已丢失或被拒绝。请重新选择文件夹以恢复访问。"
+      );
+    }
+
     const file = await fileHandle.getFile();
     return URL.createObjectURL(file);
   } catch (error) {
-    throw new Error("创建文件 URL 时发生错误：" + (error as Error).message);
+    if (error instanceof Error) {
+      // 直接抛出自定义错误或验证失败的错误
+      throw error;
+    }
+    // 包装其他未知错误
+    throw new Error("创建文件 URL 时发生未知错误：" + (error as Error).message);
   }
 }
 
 /**
  * 释放文件 URL
  * @param url 要释放的 URL
+ * @deprecated 直接使用 URL.revokeObjectURL(url) 代替
  */
 export function revokeFileURL(url: string): void {
+  console.warn('revokeFileURL is deprecated. Use URL.revokeObjectURL(url) instead.');
   URL.revokeObjectURL(url);
 }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { MediaFile } from "@/lib/types";
-import { createFileURL, revokeFileURL } from "@/lib/fileSystem";
+import { createFileURL } from "@/lib/fileSystem";
 import { getMediaTypeDisplayName, formatFileSize } from "@/lib/mediaTypes";
 import { formatDate, cn } from "@/lib/utils";
 import {
@@ -49,6 +49,7 @@ export default function MediaPlayer({
 }: MediaPlayerProps) {
   const [fileURL, setFileURL] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [imageLoading, setImageLoading] = useState(false); // 专门用于图片加载状态
   const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(1);
@@ -138,7 +139,16 @@ export default function MediaPlayer({
     }
 
     const loadMedia = async () => {
-      setLoading(true);
+      // 对于图片，如果已经有URL（即切换图片），不显示loading
+      const isImageSwitch = mediaFile.mediaType === "image" && fileURL;
+      
+      if (!isImageSwitch) {
+        setLoading(true);
+      }
+      
+      if (mediaFile.mediaType === "image") {
+        setImageLoading(true);
+      }
       setError(null);
 
       try {
@@ -153,15 +163,17 @@ export default function MediaPlayer({
 
         setFileURL(url);
 
-        // 如果是图片且有媒体列表，预加载周围的图片
+        // 如果是图片且有媒体列表，立即预加载下一张图片
         if (mediaFile.mediaType === "image" && mediaList.length > 0) {
           const currentIndex = mediaList.findIndex(
             (file) =>
               file.path === mediaFile.path && file.name === mediaFile.name
           );
           if (currentIndex !== -1) {
-            // 异步预加载，不阻塞当前图片显示
-            preloadSurroundingImages(mediaList, currentIndex);
+            // 立即预加载下一张图片，提高切换速度
+            setTimeout(() => {
+              preloadSurroundingImages(mediaList, currentIndex);
+            }, 0); // 立即执行，不阻塞当前图片显示
           }
         }
       } catch (error) {
@@ -170,8 +182,15 @@ export default function MediaPlayer({
         } else {
           setError("加载媒体文件时发生未知错误");
         }
+        setFileURL(null);
       } finally {
-        setLoading(false);
+        // 只有在显示了loading的情况下才重置它
+        if (!isImageSwitch) {
+          setLoading(false);
+        }
+        if (mediaFile.mediaType === "image") {
+          setImageLoading(false);
+        }
       }
     };
 
@@ -180,7 +199,7 @@ export default function MediaPlayer({
     // 清理函数 - 对于图片，由缓存服务管理URL生命周期
     return () => {
       if (fileURL && mediaFile?.mediaType !== "image") {
-        revokeFileURL(fileURL);
+        URL.revokeObjectURL(fileURL);
       }
     };
   }, [mediaFile, mediaList, getCachedImageURL, preloadSurroundingImages]);
@@ -189,10 +208,19 @@ export default function MediaPlayer({
   useEffect(() => {
     return () => {
       if (fileURL) {
-        revokeFileURL(fileURL);
+        URL.revokeObjectURL(fileURL);
       }
     };
   }, [fileURL]);
+
+  // 清理 URL - 移除这个effect，因为URL现在由池管理
+  // useEffect(() => {
+  //   return () => {
+  //     if (fileURL) {
+  //       revokeFileURL(fileURL);
+  //     }
+  //   };
+  // }, [fileURL]);
 
   // 确保获取媒体时长 - 处理一些边缘情况
   useEffect(() => {
@@ -404,11 +432,51 @@ export default function MediaPlayer({
     if (canNavigateNext && onNavigateNext) {
       setImageTransition(true);
 
-      // 由于本地缓存，所有导航都使用较快的切换速度
+      // 对于图片，检查下一张是否已缓存
+      if (mediaFile?.mediaType === "image" && mediaList.length > 0) {
+        const imageFiles = mediaList.filter(
+          (file) => file.mediaType === "image"
+        );
+        const currentImageIndex = imageFiles.findIndex(
+          (file) => file.path === mediaFile.path && file.name === mediaFile.name
+        );
+
+        if (
+          currentImageIndex >= 0 &&
+          currentImageIndex < imageFiles.length - 1
+        ) {
+          const nextImage = imageFiles[currentImageIndex + 1];
+          // 异步检查缓存状态
+          isCached(nextImage).then((cached) => {
+            if (cached) {
+              // 如果下一张图片已缓存，立即切换
+              setTimeout(() => {
+                onNavigateNext();
+                setImageTransition(false);
+              }, 50);
+            } else {
+              // 默认延迟
+              setTimeout(() => {
+                onNavigateNext();
+                setImageTransition(false);
+              }, 150);
+            }
+          }).catch(() => {
+            // 检查失败时使用默认延迟
+            setTimeout(() => {
+              onNavigateNext();
+              setImageTransition(false);
+            }, 150);
+          });
+          return;
+        }
+      }
+
+      // 非图片或其他情况的默认延迟
       setTimeout(() => {
         onNavigateNext();
         setImageTransition(false);
-      }, 100);
+      }, 150);
     }
   };
 
@@ -416,11 +484,48 @@ export default function MediaPlayer({
     if (canNavigatePrevious && onNavigatePrevious) {
       setImageTransition(true);
 
-      // 由于本地缓存，所有导航都使用较快的切换速度
+      // 对于图片，检查上一张是否已缓存
+      if (mediaFile?.mediaType === "image" && mediaList.length > 0) {
+        const imageFiles = mediaList.filter(
+          (file) => file.mediaType === "image"
+        );
+        const currentImageIndex = imageFiles.findIndex(
+          (file) => file.path === mediaFile.path && file.name === mediaFile.name
+        );
+
+        if (currentImageIndex > 0) {
+          const prevImage = imageFiles[currentImageIndex - 1];
+          // 异步检查缓存状态
+          isCached(prevImage).then((cached) => {
+            if (cached) {
+              // 如果上一张图片已缓存，立即切换
+              setTimeout(() => {
+                onNavigatePrevious();
+                setImageTransition(false);
+              }, 50);
+            } else {
+              // 默认延迟
+              setTimeout(() => {
+                onNavigatePrevious();
+                setImageTransition(false);
+              }, 150);
+            }
+          }).catch(() => {
+            // 检查失败时使用默认延迟
+            setTimeout(() => {
+              onNavigatePrevious();
+              setImageTransition(false);
+            }, 150);
+          });
+          return;
+        }
+      }
+
+      // 非图片或其他情况的默认延迟
       setTimeout(() => {
         onNavigatePrevious();
         setImageTransition(false);
-      }, 100);
+      }, 150);
     }
   };
 
@@ -686,7 +791,7 @@ export default function MediaPlayer({
               : "p-4"
           )}
         >
-          {loading && (
+          {loading && !fileURL && (
             <div className="flex flex-col items-center justify-center py-16">
               <Loader2 className="w-8 h-8 animate-spin text-primary mb-4" />
               <p className="text-muted-foreground">正在加载媒体文件...</p>
@@ -694,14 +799,29 @@ export default function MediaPlayer({
           )}
 
           {error && (
-            <div className="flex flex-col items-center justify-center py-16">
+            <div className="flex flex-col items-center justify-center py-16 px-4">
               <AlertCircle className="w-12 h-12 text-destructive mb-4" />
-              <h3 className="text-lg font-medium mb-2">播放失败</h3>
-              <p className="text-muted-foreground text-center">{error}</p>
+              <h3 className="text-lg font-medium mb-2">
+                {error.includes("权限") ? "文件访问权限已丢失" : "播放失败"}
+              </h3>
+              <p className="text-muted-foreground text-center mb-4 max-w-md">
+                {error}
+              </p>
+
+              {error.includes("权限") && (
+                <div className="text-sm text-muted-foreground text-center space-y-2">
+                  <p>
+                    出于安全原因，浏览器可能会在一段时间后撤销文件夹的访问权限。
+                  </p>
+                  <p className="font-medium text-foreground">
+                    请重新选择文件夹以继续访问。
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
-          {fileURL && !loading && !error && (
+          {fileURL && !error && (
             <div
               className={cn(
                 isFullscreen
@@ -831,12 +951,27 @@ export default function MediaPlayer({
                       src={fileURL}
                       alt={mediaFile.name}
                       className={cn(
-                        "transition-all duration-300",
+                        "transition-opacity duration-150",
                         isFullscreen
                           ? "max-w-full max-h-full object-contain" // 全屏时确保适应容器
                           : "max-w-full max-h-[60vh] mx-auto rounded-lg object-contain"
                       )}
                       onError={() => setError("图片文件无法显示")}
+                      onLoad={() => {
+                        // 图片加载完成后立即显示，减少闪烁
+                        setImageLoading(false);
+                        if (imageRef.current) {
+                          imageRef.current.style.opacity = "1";
+                        }
+                      }}
+                      style={{
+                        // 使用硬件加速和快速渲染
+                        willChange: "transform, opacity",
+                        transform: "translateZ(0)",
+                        imageRendering: "auto" as const, // 自动选择最佳渲染模式
+                        opacity: imageLoading ? "0.5" : "1", // 加载时半透明
+                        transition: "opacity 0.1s ease-in-out" // 非常快的过渡
+                      }}
                     />
 
                     {/* 导航按钮 - 仅在有多张图片时显示 */}

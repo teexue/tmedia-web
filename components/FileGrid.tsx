@@ -77,8 +77,8 @@ export default function FileGrid({
       }
 
       // 生成新的缩略图
-      const fileUrl = await createFileURL(mediaFile.handle as FileSystemFileHandle);
-      const response = await fetch(fileUrl);
+      const url = await createFileURL(mediaFile.handle as FileSystemFileHandle);
+      const response = await fetch(url);
       const file = await response.blob();
       
       const thumbnailUrl = await thumbnailCache.generateAndCache(cacheKey, file as File, {
@@ -94,8 +94,8 @@ export default function FileGrid({
         [cacheKey]: { url: thumbnailUrl, loading: false, error: false }
       }));
 
-      // 清理原始文件 URL
-      URL.revokeObjectURL(fileUrl);
+      // 释放原始文件 URL
+      URL.revokeObjectURL(url);
       
       return thumbnailUrl;
     } catch (error) {
