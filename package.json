@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:url-pool": "echo 'URL池测试：请在浏览器控制台运行 testURLPool()'"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
